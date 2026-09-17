@@ -342,10 +342,19 @@ function randShape(){
   const pool=Math.random()<hardChance?HARD_SHAPES:EASY_SHAPES;
   return pool[Math.floor(Math.random()*pool.length)];
 }
+// Full hue wheel, but saturation/lightness stay locked into vivid territory so nothing
+// ever comes out muddy, pastel, or dark — every draw is a fresh random hue, not tied to
+// shape type at all.
+function randomBrightColor(){
+  const hue=Math.random()*360;
+  const sat=68+Math.random()*17;
+  const light=56+Math.random()*9;
+  return `hsl(${hue.toFixed(1)},${sat.toFixed(0)}%,${light.toFixed(0)}%)`;
+}
 function spawnBlock(){
   const dir=Math.random()<0.5?-1:1;
   const s=randShape();
-  current={cx: dir>0? -BLOCK_W/2 : W+BLOCK_W/2, cy:topOfStackY()-SHAPE_H/2-10*DPR, dir, shape:s.name, color:s.color};
+  current={cx: dir>0? -BLOCK_W/2 : W+BLOCK_W/2, cy:topOfStackY()-SHAPE_H/2-10*DPR, dir, shape:s.name, color:randomBrightColor()};
 }
 // Live top surface of the whole tower (rotation-aware, via each body's real bounds) so the
 // aiming piece and spawn height always track the tower's actual current shape, not a stale one.
