@@ -81,7 +81,7 @@
   <button onclick="requestStartGame()">PLAY</button>
   <div class="btnrow navRow">
     <button class="secondary" onclick="showShop()">Shop</button>
-    <button class="secondary" id="spinToggle" onclick="toggleSpinMode()">🌀 Spin Mode: OFF</button>
+    <button class="secondary" id="hardModeToggle" onclick="toggleHardMode()">🌀 Hard Mode: OFF</button>
   </div>
 </div>
 
@@ -104,8 +104,7 @@
   <div class="shopList" id="overlayShopList"></div>
 </div>
 
-<!-- Poki SDK intentionally omitted from this public demo build: it flags unapproved
-     domains with a DMCA-style warning. Poki's own hosting will use the SDK-enabled source. -->
+<!-- Poki SDK intentionally omitted from this public demo build; see source repo for full Poki integration -->
 <script src="matter.min.js"></script>
 <script>
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
@@ -125,20 +124,20 @@ let BLOCK_W, BLOCK_H, SHAPE_W, SHAPE_H, BASE_SHAPE_W;
 let engine,blocks,strayBodies,current,fallingBody,settleTimer,spawnFrames;
 let camY,camTarget,score,particles,shake,state,speed,combo,stackTopY,failY;
 let pieceFriction,baseSpeed,maxSpeed,speedInc;
-// Spin mode: an optional twist where the aiming piece also spins while it slides, so you're
+// Hard Mode: an optional twist where the aiming piece also spins while it slides, so you're
 // timing rotation as well as position. The physics body it becomes on drop inherits whatever
 // angle it was actually at, so a bad release genuinely lands crooked, not just off-center.
-let spinMode=false;
-function toggleSpinMode(){
-  spinMode=!spinMode;
-  const btn=document.getElementById('spinToggle');
-  btn.textContent='🌀 Spin Mode: '+(spinMode?'ON':'OFF');
-  btn.classList.toggle('on',spinMode);
+let hardMode=false;
+function toggleHardMode(){
+  hardMode=!hardMode;
+  const btn=document.getElementById('hardModeToggle');
+  btn.textContent='🌀 Hard Mode: '+(hardMode?'ON':'OFF');
+  btn.classList.toggle('on',hardMode);
 }
 // Wind gust twist: every few placements, a telegraphed gust shoves the whole standing
 // tower sideways for real (via Matter forces) — Grip directly helps resist it.
 let gustState,gustTimer,gustDir,placementsSinceGust,gustsSurvived,windParticles;
-const GUST_EVERY=9, GUST_WARN_FRAMES=80, GUST_ACTIVE_FRAMES=40;
+const GUST_EVERY=9, GUST_WARN_FRAMES=80, GUST_ACTIVE_FRAMES=40, GUST_CONFIRM_FRAMES=25;
 
 // ---- Save data: coins, personal best, upgrade levels, mute preference (localStorage only) ----
 const SAVE_KEY='shapeStackerSave_v1';
@@ -374,7 +373,7 @@ function spawnBlock(){
   const dir=Math.random()<0.5?-1:1;
   const s=randShape();
   current={cx: dir>0? -BLOCK_W/2 : W+BLOCK_W/2, cy:topOfStackY()-SHAPE_H/2-90*DPR, dir, shape:s.name, color:randomBrightColor(), angle:0,
-    spinSpeed: spinMode?(Math.random()<0.5?-1:1)*(0.05+Math.random()*0.04):0};
+    spinSpeed: hardMode?(Math.random()<0.5?-1:1)*(0.05+Math.random()*0.04):0};
 }
 // Live top surface of the whole tower (rotation-aware, via each body's real bounds) so the
 // aiming piece and spawn height always track the tower's actual current shape, not a stale one.
@@ -401,7 +400,7 @@ function drop(){
   const body=makeBody(current.cx,current.cy-14*DPR,current.shape,SHAPE_W,SHAPE_H,{friction:liveFriction,frictionStatic:liveFriction+0.25,restitution:0.02,density:0.0025});
   body.shapeName=current.shape; body.shapeColor=current.color;
   body.eye=current.eye; // carry the aiming piece's eye state over — same face, not a fresh random one
-  if(spinMode) Matter.Body.setAngle(body,current.angle); // lands however it was actually spinning at release
+  if(hardMode) Matter.Body.setAngle(body,current.angle); // lands however it was actually spinning at release
   Matter.Composite.add(engine.world,body);
   fallingBody=body; settleTimer=0; spawnFrames=0;
   current=null;
@@ -471,7 +470,7 @@ function update(){
     if(current.cx-BLOCK_W/2<=0 && current.dir<0) current.dir=1;
     if(current.cx+BLOCK_W/2>=W && current.dir>0) current.dir=-1;
     current.cy=topOfStackY()-SHAPE_H/2-90*DPR;
-    if(spinMode) current.angle+=current.spinSpeed;
+    if(hardMode) current.angle+=current.spinSpeed;
   }
   Matter.Engine.update(engine,1000/60);
 
@@ -513,7 +512,7 @@ function update(){
     const heightLevel=blocks.length-1;
     // Wind still gets a little stronger with height/survived gusts, but it's hard-capped —
     // no matter how high the score climbs, this never grows past a light gust.
-    const baseAccel=Math.min(0.00045,0.00032+gustsSurvived*0.00002+heightLevel*0.000008);
+    const baseAccel=Math.min(0.0003,0.00022+gustsSurvived*0.000014+heightLevel*0.000005);
     const accel=baseAccel*DPR*gustDir*envelope;
     for(let i=1;i<blocks.length;i++){
       const b=blocks[i];
@@ -523,17 +522,24 @@ function update(){
     if(fallingBody){ Matter.Body.applyForce(fallingBody,fallingBody.position,{x:accel*fallingBody.mass,y:0}); }
     if(Math.random()<0.5) windParticles.push({x:gustDir>0?-20*DPR:W+20*DPR,y:Math.random()*H,vx:gustDir*(9+Math.random()*5)*DPR,life:1});
     if(gustTimer<=0){
+      // Force stops here, but a hard-hit piece can still be mid-topple — wait and confirm
+      // nothing actually falls before calling it "stood firm". If it topples during this
+      // window, triggerGameOver() fires on its own and this state==='play' guard simply
+      // never lets the bonus code below run.
+      gustState='confirming'; gustTimer=GUST_CONFIRM_FRAMES;
+    }
+  } else if(state==='play' && gustState==='confirming'){
+    gustTimer--;
+    if(gustTimer<=0){
       gustState='none';
       gustsSurvived++;
-      if(state==='play'){
-        score+=2; save.coins+=3; persist();
-        document.getElementById('score').textContent=score;
-        updateCoinDisplays();
-        burst(W/2,H*0.28,'#8ecdfa',18);
-        const sEl=document.getElementById('windSurvived');
-        sEl.classList.add('show');
-        setTimeout(()=>sEl.classList.remove('show'),1100);
-      }
+      score+=2; save.coins+=3; persist();
+      document.getElementById('score').textContent=score;
+      updateCoinDisplays();
+      burst(W/2,H*0.28,'#8ecdfa',18);
+      const sEl=document.getElementById('windSurvived');
+      sEl.classList.add('show');
+      setTimeout(()=>sEl.classList.remove('show'),1100);
     }
   }
   for(const p of windParticles){ p.x+=p.vx; p.life-=0.012; }
