@@ -124,7 +124,7 @@ let pieceFriction,baseSpeed,maxSpeed,speedInc;
 // Wind gust twist: every few placements, a telegraphed gust shoves the whole standing
 // tower sideways for real (via Matter forces) — Grip directly helps resist it.
 let gustState,gustTimer,gustDir,placementsSinceGust,gustsSurvived,windParticles;
-const GUST_EVERY=10, GUST_WARN_FRAMES=80, GUST_ACTIVE_FRAMES=40;
+const GUST_EVERY=14, GUST_WARN_FRAMES=80, GUST_ACTIVE_FRAMES=40;
 
 // ---- Save data: coins, personal best, upgrade levels, mute preference (localStorage only) ----
 const SAVE_KEY='shapeStackerSave_v1';
@@ -279,10 +279,10 @@ function startGame(){
   // climb from 0 to max still lands on a sensible total (full grip ~1.15, base up to 400,
   // swing down to 40% speed at max), instead of the old 5-level increments blowing past those.
   const baseLv=save.upg.base, fricLv=save.upg.friction, speedLv=save.upg.speed;
-  BASE_SHAPE_W=(280+baseLv*6)*DPR*0.96;
+  BASE_SHAPE_W=(305+baseLv*6)*DPR*0.96;
   pieceFriction=0.90+fricLv*0.0125;
   const speedScale=1-speedLv*0.03;
-  baseSpeed=4*DPR*speedScale; maxSpeed=9*DPR*speedScale; speedInc=0.15*DPR*speedScale;
+  baseSpeed=3.3*DPR*speedScale; maxSpeed=7.5*DPR*speedScale; speedInc=0.12*DPR*speedScale;
 
   engine=Matter.Engine.create();
   engine.world.gravity.y=1.6;
@@ -338,7 +338,7 @@ const EASY_SHAPES=SHAPES.filter(s=>s.name==='square'||s.name==='hexagon'||s.name
 const HARD_SHAPES=SHAPES.filter(s=>s.name==='triangle'||s.name==='diamond'||s.name==='pentagon');
 function randShape(){
   const heightLevel=blocks.length-1;
-  const hardChance=Math.min(0.78,0.15+heightLevel*0.03);
+  const hardChance=Math.min(0.55,0.08+heightLevel*0.018);
   const pool=Math.random()<hardChance?HARD_SHAPES:EASY_SHAPES;
   return pool[Math.floor(Math.random()*pool.length)];
 }
@@ -375,11 +375,12 @@ function drop(){
   if(state!=='play'||!current) return;
   playSfx(sfx.clickDrop);
   // The higher the tower, the slipperier pieces get — friction decays per level climbed,
-  // floored so it never becomes uncontrollable.
+  // floored (generously) so it never becomes uncontrollable.
   const heightLevel=blocks.length-1;
-  const liveFriction=Math.max(0.35,pieceFriction-heightLevel*0.02);
+  const liveFriction=Math.max(0.5,pieceFriction-heightLevel*0.012);
   const body=makeBody(current.cx,current.cy-14*DPR,current.shape,SHAPE_W,SHAPE_H,{friction:liveFriction,frictionStatic:liveFriction+0.25,restitution:0.02,density:0.0025});
   body.shapeName=current.shape; body.shapeColor=current.color;
+  body.eye=current.eye; // carry the aiming piece's eye state over — same face, not a fresh random one
   Matter.Composite.add(engine.world,body);
   fallingBody=body; settleTimer=0; spawnFrames=0;
   current=null;
