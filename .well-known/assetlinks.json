@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "io.github.jacksonburks777_pixel.twa",
+        "sha256_cert_fingerprints": ["E1:B6:CB:63:51:95:E6:72:3A:E3:67:42:FD:9F:9D:FD:3E:BC:C5:99:B3:87:8E:71:65:E0:A8:9B:15:09:95:E1"]
+      }
+    }]
