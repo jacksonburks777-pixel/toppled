@@ -281,6 +281,7 @@ function startGame(){
   engine=Matter.Engine.create();
   engine.world.gravity.y=1.6;
   engine.enableSleeping=true;
+  Matter.Events.on(engine,'collisionStart',handleCollision);
   blocks=[]; strayBodies=[]; particles=[];
   camY=0;camTarget=0;score=0;shake=0;speed=baseSpeed;combo=0;fallingBody=null;
   gustState='none'; gustTimer=0; gustDir=1; placementsSinceGust=0; gustsSurvived=0; windParticles=[];
@@ -446,6 +447,7 @@ function update(){
   if(state==='play' && fallingBody){
     spawnFrames++;
     const b=fallingBody;
+    ensureEye(b).forceCloseTimer=10; // re-armed every frame while airborne, so eyes stay shut for the whole fall
     const spd=Math.hypot(b.velocity.x,b.velocity.y)+Math.abs(b.angularVelocity)*15;
     if(spd<0.05) settleTimer++; else settleTimer=0;
     if(b.position.y>=failY){ strayBodies.push(b); fallingBody=null; shake=10*DPR; triggerGameOver(); }
@@ -495,6 +497,11 @@ function update(){
   shake *= 0.85;
   for(const p of particles){ p.x+=p.vx;p.y+=p.vy;p.vy+=0.15*DPR;p.life-=0.03; }
   particles=particles.filter(p=>p.life>0);
+
+  for(const b of blocks) updateEye(b);
+  if(fallingBody) updateEye(fallingBody);
+  for(const b of strayBodies) updateEye(b);
+  if(current) updateEye(current);
 }
 // Draws from the exact same vertex data used for the physics hitbox (shapeVerts), so the
 // rendered silhouette and the collision shape are always perfectly aligned.
@@ -505,14 +512,74 @@ function shapePath(shape,w,h){
   for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y);
   ctx.closePath();
 }
+// ---- Eye behavior: each piece owns its own eye state (attached directly to the Matter body,
+// or to `current`/decorative shapes as a plain object), so every face looks around, blinks,
+// and reacts entirely independently of every other piece. ----
+function ensureEye(holder){
+  if(!holder.eye){
+    holder.eye={
+      timer:Math.random()*60, lookX:0, lookY:0, targetX:0, targetY:0,
+      blinkTimer:90+Math.random()*220, blinking:false, blinkDuration:0,
+      forceCloseTimer:0
+    };
+  }
+  return holder.eye;
+}
+function updateEye(holder){
+  const e=ensureEye(holder);
+  e.timer--;
+  if(e.timer<=0){
+    e.timer=45+Math.random()*90;
+    if(Math.random()<0.55){ e.targetX=0; e.targetY=0; } // rest, settling back toward gravity-down
+    else{
+      const ang=Math.random()*Math.PI*2, mag=0.3+Math.random()*0.55;
+      e.targetX=Math.cos(ang)*mag; e.targetY=Math.sin(ang)*mag;
+    }
+  }
+  e.lookX+=(e.targetX-e.lookX)*0.15;
+  e.lookY+=(e.targetY-e.lookY)*0.15;
+  if(e.forceCloseTimer>0) e.forceCloseTimer--;
+  if(e.blinking){
+    e.blinkDuration--;
+    if(e.blinkDuration<=0) e.blinking=false;
+  } else {
+    e.blinkTimer--;
+    if(e.blinkTimer<=0){ e.blinking=true; e.blinkDuration=7; e.blinkTimer=150+Math.random()*260; }
+  }
+}
+// A real hit — landing hard, getting bumped by a neighbor, catching a wind-blown piece —
+// snaps eyes shut for a beat. Driven off Matter's actual collision event + impact speed,
+// not guessed from game state, so it fires for whichever two bodies really collided.
+function flinch(b){
+  if(!b) return;
+  const e=ensureEye(b);
+  e.forceCloseTimer=Math.max(e.forceCloseTimer,16);
+}
+function handleCollision(event){
+  for(const pair of event.pairs){
+    const {bodyA,bodyB}=pair;
+    const rvx=bodyA.velocity.x-bodyB.velocity.x, rvy=bodyA.velocity.y-bodyB.velocity.y;
+    if(Math.hypot(rvx,rvy)>1.6*DPR){ flinch(bodyA); flinch(bodyB); }
+  }
+}
 // Eye sockets are drawn in the shape's own rotated frame (so they sit fixed on its surface),
-// but the pupils counter-rotate by -angle so they stay weighted toward true world-down —
-// exactly how a real googly eye's loose disc settles under gravity, regardless of the
-// shape's own spin. Angle 0 (the aiming piece, never rotated) just looks straight down.
-function drawEyes(angle,w,h){
+// but the pupils counter-rotate by -angle so their gravity-down resting bias stays true to
+// world-down regardless of the shape's own spin — the independent look-around/blink state
+// (eye) rides on top of that. Closed (blinking or force-closed) draws a simple lash instead.
+function drawEyes(angle,w,h,eye){
   const eyeR=h*0.16, pupilR=eyeR*0.42, offX=w*0.15;
+  const closed=eye&&(eye.blinking||eye.forceCloseTimer>0);
   for(const side of [-1,1]){
     const ex=side*offX;
+    if(closed){
+      ctx.strokeStyle='#222';
+      ctx.lineWidth=Math.max(1.5,eyeR*0.32);
+      ctx.lineCap='round';
+      ctx.beginPath();
+      ctx.arc(ex,eyeR*0.1,eyeR*0.7,Math.PI*0.15,Math.PI*0.85);
+      ctx.stroke();
+      continue;
+    }
     ctx.beginPath();
     ctx.fillStyle='#fff';
     ctx.arc(ex,0,eyeR,0,Math.PI*2);
@@ -520,9 +587,13 @@ function drawEyes(angle,w,h){
     ctx.save();
     ctx.translate(ex,0);
     ctx.rotate(-angle);
+    const maxOff=eyeR-pupilR;
+    let px=(eye?eye.lookX:0)*maxOff, py=maxOff+(eye?eye.lookY:0)*maxOff*0.6;
+    const dist=Math.hypot(px,py);
+    if(dist>maxOff){ px*=maxOff/dist; py*=maxOff/dist; }
     ctx.fillStyle='#222';
     ctx.beginPath();
-    ctx.arc(0,eyeR-pupilR,pupilR,0,Math.PI*2);
+    ctx.arc(px,py,pupilR,0,Math.PI*2);
     ctx.fill();
     ctx.restore();
   }
@@ -534,7 +605,7 @@ function drawBody(b){
   ctx.fillStyle=b.shapeColor;
   shapePath(b.shapeName,b.shapeW,b.shapeH);
   ctx.fill();
-  drawEyes(b.angle,b.shapeW,b.shapeH);
+  drawEyes(b.angle,b.shapeW,b.shapeH,b.eye);
   ctx.restore();
 }
 // Purely decorative backdrop: a soft gradient plus large, slowly drifting versions of the
@@ -596,7 +667,7 @@ function draw(){
     ctx.fillStyle=current.color;
     shapePath(current.shape,SHAPE_W,SHAPE_H);
     ctx.fill();
-    drawEyes(0,SHAPE_W,SHAPE_H);
+    drawEyes(0,SHAPE_W,SHAPE_H,current.eye);
     ctx.restore();
   }
   for(const p of particles){
