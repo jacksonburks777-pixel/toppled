@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Toppled!</title>
+<style>
+  /* Core mechanic: drop sliding shapes onto the stack; real rigid-body physics (Matter.js) decides if it settles or topples */
+  html,body{margin:0;height:100%;background:#1b1f3b;overflow:hidden;font-family:'Segoe UI',Arial,sans-serif;}
+  canvas{display:block;touch-action:none;}
+  #ui{position:fixed;top:0;left:0;width:100%;text-align:center;color:#fff;pointer-events:none;z-index:5;}
+  #score{font-size:48px;font-weight:700;margin-top:18px;text-shadow:0 2px 8px rgba(0,0,0,.4);}
+  #bestLine{font-size:14px;font-weight:600;color:rgba(255,255,255,.55);margin-top:2px;letter-spacing:.5px;}
+  #bestLine b{color:#ffd93d;}
+  #combo{font-size:20px;font-weight:700;margin-top:6px;color:#ffd93d;text-shadow:0 2px 6px rgba(0,0,0,.4);opacity:0;transition:opacity .15s;}
+  #combo.show{opacity:1;}
+
+  #coinPill{position:fixed;top:16px;left:16px;z-index:20;display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.1);backdrop-filter:blur(4px);border:1px solid rgba(255,217,61,.35);border-radius:20px;padding:7px 14px 7px 10px;color:#ffd93d;font-weight:700;font-size:15px;}
+  #muteBtn{position:fixed;top:16px;right:16px;z-index:20;width:38px;height:38px;padding:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.1);backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.25);border-radius:50%;color:#fff;font-size:16px;box-shadow:none;}
+  #muteBtn:active{transform:scale(.9);}
+
+  #windWarning{position:fixed;top:130px;left:0;width:100%;text-align:center;color:#8ecdfa;font-weight:800;font-size:17px;letter-spacing:.5px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:6;text-shadow:0 2px 10px rgba(0,0,0,.6);}
+  #windWarning.show{opacity:1;}
+  #windSurvived{position:fixed;top:130px;left:0;width:100%;text-align:center;color:#4dffa8;font-weight:800;font-size:17px;letter-spacing:.5px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:6;text-shadow:0 2px 10px rgba(0,0,0,.6);}
+  #windSurvived.show{opacity:1;}
+
+  .panel{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(10,12,30,.74);backdrop-filter:blur(2px);color:#fff;text-align:center;z-index:10;overflow-y:auto;padding:24px 16px;box-sizing:border-box;}
+  .panel.show{display:flex;}
+  .panel h1{font-size:42px;margin:0 0 6px;letter-spacing:1px;}
+  .panel p{opacity:.75;margin:0 0 20px;font-size:15px;max-width:280px;line-height:1.5;}
+  .panel p.subtle{margin:0 0 16px;font-size:13px;opacity:.55;}
+  #menuBest{font-size:14px;color:rgba(255,255,255,.6);margin:0 0 18px;font-weight:600;}
+  #menuBest b{color:#ffd93d;}
+
+  .btnrow{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;}
+  button{font-size:20px;padding:12px 30px;border:none;border-radius:30px;background:#ff5d73;color:#fff;cursor:pointer;box-shadow:0 6px 16px rgba(255,93,115,.4);font-weight:600;font-family:inherit;}
+  button.secondary{background:rgba(255,255,255,.12);box-shadow:none;font-size:16px;padding:10px 24px;}
+  button:active{transform:scale(.95);}
+  button:disabled{opacity:.35;cursor:default;transform:none;}
+  .navRow{margin-top:18px;}
+
+  .preview{display:flex;gap:10px;margin-bottom:20px;}
+  .preview span{width:26px;height:26px;border-radius:6px;display:inline-block;}
+
+  #coinsEarned{font-size:16px;font-weight:700;color:#ffd93d;margin:-8px 0 18px;opacity:0;transition:opacity .3s;}
+  #coinsEarned.show{opacity:1;}
+
+  .shopList{display:flex;flex-direction:column;gap:12px;width:100%;max-width:340px;margin-bottom:20px;}
+  .upgradeCard{display:flex;align-items:center;gap:14px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:12px 16px;text-align:left;}
+  .upgradeIcon{font-size:26px;width:32px;text-align:center;flex-shrink:0;}
+  .upgradeInfo{flex:1;min-width:0;}
+  .upgradeInfo .name{font-weight:700;font-size:15px;}
+  .upgradeInfo .desc{font-size:11px;opacity:.6;margin-top:1px;}
+  .levelDots{display:flex;gap:4px;margin-top:6px;}
+  .levelDot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.18);}
+  .levelDot.filled{background:#ffd93d;}
+  .buyBtn{font-size:13px;padding:9px 14px;border-radius:20px;box-shadow:none;flex-shrink:0;white-space:nowrap;}
+  .buyBtn.maxed{background:rgba(77,255,168,.18);color:#4dffa8;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div id="score">0</div>
+  <div id="bestLine">BEST <b id="bestVal">0</b></div>
+  <div id="combo">COMBO x1</div>
+</div>
+<div id="coinPill">🪙 <span id="coinCount">0</span></div>
+<button id="muteBtn" onclick="toggleMute()">🔊</button>
+<div id="windWarning">💨 WIND INCOMING</div>
+<div id="windSurvived">STOOD FIRM  +3 🪙</div>
+
+<div id="menu" class="panel show">
+  <h1>TOPPLED!</h1>
+  <div id="menuBest">Best score: <b id="menuBestVal">0</b></div>
+  <div class="preview">
+    <span style="background:#ff5d73"></span><span style="background:#5dc9ff;border-radius:50%"></span><span style="background:#ffd93d"></span><span style="background:#4dffb8"></span><span style="background:#c98bff"></span>
+  </div>
+  <p>Tap to drop the shape onto the stack. Real physics decides what happens next — land off-balance and it topples for real.</p>
+  <button onclick="requestStartGame()">PLAY</button>
+  <div class="btnrow navRow">
+    <button class="secondary" onclick="showShop()">Shop</button>
+  </div>
+</div>
+
+<div id="shop" class="panel">
+  <h1>SHOP</h1>
+  <p class="subtle">Spend coins earned from runs on permanent upgrades</p>
+  <div class="shopList" id="shopList"></div>
+  <button class="secondary" onclick="showMenu()">Back</button>
+</div>
+
+<div id="overlay" class="panel">
+  <h1>Toppled!</h1>
+  <p id="finalScore"></p>
+  <div id="coinsEarned"></div>
+  <div class="btnrow">
+    <button onclick="requestStartGame()">Restart</button>
+    <button class="secondary" onclick="showMenu()">Menu</button>
+  </div>
+</div>
+
+<script src="https://game-cdn.poki.com/scripts/v2/poki-sdk.js"></script>
+<script src="matter.min.js"></script>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+let W,H,DPR;
+function resize(){DPR=window.devicePixelRatio||1;W=cv.width=innerWidth*DPR;H=cv.height=innerHeight*DPR;cv.style.width=innerWidth+'px';cv.style.height=innerHeight+'px';}
+window.addEventListener('resize',resize);resize();
+
+const SHAPES=[
+  {name:'square',  color:'#ff5d73'},
+  {name:'circle',  color:'#5dc9ff'},
+  {name:'triangle',color:'#ffd93d'},
+  {name:'hexagon', color:'#4dffb8'},
+  {name:'diamond', color:'#c98bff'},
+  {name:'pentagon',color:'#ff9f4d'}
+];
+let BLOCK_W, BLOCK_H, SHAPE_W, SHAPE_H, BASE_SHAPE_W;
+let engine,blocks,strayBodies,current,fallingBody,settleTimer,spawnFrames;
+let camY,camTarget,score,particles,shake,state,speed,combo,stackTopY,failY;
+let pieceFriction,baseSpeed,maxSpeed,speedInc;
+// Wind gust twist: every few placements, a telegraphed gust shoves the whole standing
+// tower sideways for real (via Matter forces) — Grip directly helps resist it.
+let gustState,gustTimer,gustDir,placementsSinceGust,gustsSurvived,windParticles;
+const GUST_EVERY=6, GUST_WARN_FRAMES=80, GUST_ACTIVE_FRAMES=40;
+
+// ---- Save data: coins, personal best, upgrade levels, mute preference (localStorage only) ----
+const SAVE_KEY='shapeStackerSave_v1';
+function loadSave(){
+  try{
+    const raw=localStorage.getItem(SAVE_KEY);
+    if(raw) return Object.assign({coins:0,best:0,upg:{friction:0,base:0,speed:0},muted:false}, JSON.parse(raw));
+  }catch(e){}
+  return {coins:0,best:0,upg:{friction:0,base:0,speed:0},muted:false};
+}
+let save=loadSave();
+function persist(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(save)); }catch(e){} }
+function updateCoinDisplays(){ document.getElementById('coinCount').textContent=save.coins; }
+
+// ---- Audio: looping music, two click sounds, a game-over sting. Files sit alongside this
+// page. Autoplay-with-sound is blocked by browsers until a real user gesture, so music only
+// starts on the first pointerdown/keydown; everything respects the mute toggle. ----
+const bgMusic=new Audio('bgm.mp3'); bgMusic.loop=true; bgMusic.volume=0.35;
+const sfx={
+  clickUI:new Audio('click-ui.mp3'),
+  clickDrop:new Audio('click-drop.mp3'),
+  gameOver:new Audio('gameover.mp3')
+};
+sfx.clickUI.volume=0.5; sfx.clickDrop.volume=0.55; sfx.gameOver.volume=0.6;
+bgMusic.muted=save.muted;
+function playSfx(a){
+  if(save.muted) return;
+  try{ a.currentTime=0; a.play().catch(()=>{}); }catch(e){}
+}
+let audioUnlocked=false;
+function unlockAudio(){
+  if(audioUnlocked) return;
+  audioUnlocked=true;
+  if(!save.muted) bgMusic.play().catch(()=>{});
+}
+window.addEventListener('pointerdown',unlockAudio,{once:true});
+window.addEventListener('keydown',unlockAudio,{once:true});
+function toggleMute(){
+  save.muted=!save.muted;
+  persist();
+  bgMusic.muted=save.muted;
+  document.getElementById('muteBtn').textContent=save.muted?'🔇':'🔊';
+  if(!save.muted && audioUnlocked) bgMusic.play().catch(()=>{});
+}
+
+// ---- Poki SDK (present only when hosted on Poki; every call below is guarded so the game
+// runs identically standalone). Verified against developers.poki.com/guide/sdk-html5. ----
+const pokiSDK=(typeof PokiSDK!=='undefined')?PokiSDK:null;
+if(pokiSDK) pokiSDK.init().catch(()=>{});
+function requestStartGame(){
+  playSfx(sfx.clickUI);
+  if(pokiSDK){
+    pokiSDK.commercialBreak(()=>{ bgMusic.pause(); }).then(()=>{
+      if(!save.muted) bgMusic.play().catch(()=>{});
+      startGame();
+    });
+  } else {
+    startGame();
+  }
+}
+
+const UPGRADES=[
+  {key:'friction', name:'Grip',       icon:'🧱', desc:'Pieces stick better on landing',    max:5, baseCost:20},
+  {key:'base',     name:'Base Length',icon:'📏', desc:'Wider foundation to build on',      max:5, baseCost:25},
+  {key:'speed',    name:'Slow Swing', icon:'🐌', desc:'Slower back-and-forth motion',      max:5, baseCost:30}
+];
+function upgradeCost(u){ return Math.round(u.baseCost*Math.pow(1.8,save.upg[u.key])); }
+function buyUpgrade(key){
+  const u=UPGRADES.find(x=>x.key===key), lvl=save.upg[key];
+  if(lvl>=u.max) return;
+  const cost=upgradeCost(u);
+  if(save.coins<cost) return;
+  playSfx(sfx.clickUI);
+  save.coins-=cost; save.upg[key]=lvl+1;
+  persist(); renderShop(); updateCoinDisplays();
+}
+function renderShop(){
+  const list=document.getElementById('shopList');
+  list.innerHTML='';
+  for(const u of UPGRADES){
+    const lvl=save.upg[u.key], maxed=lvl>=u.max, cost=maxed?0:upgradeCost(u);
+    const afford=!maxed && save.coins>=cost;
+    const dots=Array.from({length:u.max}).map((_,i)=>`<span class="levelDot ${i<lvl?'filled':''}"></span>`).join('');
+    const card=document.createElement('div');
+    card.className='upgradeCard';
+    card.innerHTML=
+      '<div class="upgradeIcon">'+u.icon+'</div>'+
+      '<div class="upgradeInfo"><div class="name">'+u.name+'</div>'+
+      '<div class="desc">'+u.desc+'</div>'+
+      '<div class="levelDots">'+dots+'</div></div>'+
+      '<button class="buyBtn'+(maxed?' maxed':'')+'" '+(maxed||!afford?'disabled':'')+' data-key="'+u.key+'">'+(maxed?'MAX':'🪙 '+cost)+'</button>';
+    list.appendChild(card);
+  }
+  list.querySelectorAll('.buyBtn').forEach(btn=>{
+    if(!btn.disabled) btn.addEventListener('click',()=>buyUpgrade(btn.dataset.key));
+  });
+}
+
+// Local (centered-at-origin) outline for each shape, matching shapePath() exactly, so the
+// physics hitbox is the real silhouette instead of its bounding rectangle.
+function shapeVerts(shape,w,h){
+  const hw=w/2, hh=h/2;
+  let pts;
+  switch(shape){
+    case 'circle': {
+      pts=[];
+      const N=20;
+      for(let i=0;i<N;i++){ const a=i/N*Math.PI*2; pts.push({x:Math.cos(a)*hw,y:Math.sin(a)*hh}); }
+      break;
+    }
+    case 'triangle':
+      pts=[{x:0,y:-hh},{x:hw,y:hh},{x:-hw,y:hh}]; break;
+    case 'diamond':
+      pts=[{x:0,y:-hh},{x:hw,y:0},{x:0,y:hh},{x:-hw,y:0}]; break;
+    case 'hexagon':
+      pts=[{x:-hw*0.5,y:-hh},{x:hw*0.5,y:-hh},{x:hw,y:0},{x:hw*0.5,y:hh},{x:-hw*0.5,y:hh},{x:-hw,y:0}]; break;
+    case 'pentagon':
+      pts=[];
+      for(let i=0;i<5;i++){ const a=-Math.PI/2+i*(Math.PI*2/5); pts.push({x:Math.cos(a)*hw,y:Math.sin(a)*hh}); }
+      break;
+    default:
+      pts=[{x:-hw,y:-hh},{x:hw,y:-hh},{x:hw,y:hh},{x:-hw,y:hh}];
+  }
+  const c=Matter.Vertices.centre(pts);
+  return pts.map(p=>({x:p.x-c.x,y:p.y-c.y}));
+}
+function makeBody(cx,cy,shape,w,h,opts){
+  const world=shapeVerts(shape,w,h).map(p=>({x:p.x+cx,y:p.y+cy}));
+  const body=Matter.Bodies.fromVertices(cx,cy,[world],opts,true);
+  body.shapeW=w; body.shapeH=h;
+  return body;
+}
+
+function startGame(){
+  ['menu','overlay','shop'].forEach(id=>document.getElementById(id).classList.remove('show'));
+  document.getElementById('ui').style.display='block';
+  BLOCK_W=145*DPR; BLOCK_H=68*DPR;
+  SHAPE_W=BLOCK_W*0.96; SHAPE_H=BLOCK_H*0.9;
+
+  const baseLv=save.upg.base, fricLv=save.upg.friction, speedLv=save.upg.speed;
+  BASE_SHAPE_W=(280+baseLv*15)*DPR*0.96;
+  pieceFriction=0.90+fricLv*0.02;
+  const speedScale=1-speedLv*0.08;
+  baseSpeed=4*DPR*speedScale; maxSpeed=9*DPR*speedScale; speedInc=0.15*DPR*speedScale;
+
+  engine=Matter.Engine.create();
+  engine.world.gravity.y=1.6;
+  engine.enableSleeping=true;
+  blocks=[]; strayBodies=[]; particles=[];
+  camY=0;camTarget=0;score=0;shake=0;speed=baseSpeed;combo=0;fallingBody=null;
+  gustState='none'; gustTimer=0; gustDir=1; placementsSinceGust=0; gustsSurvived=0; windParticles=[];
+  document.getElementById('windWarning').classList.remove('show');
+  document.getElementById('windSurvived').classList.remove('show');
+  state='play';
+  if(pokiSDK) pokiSDK.gameplayStart();
+
+  const base=makeBody(W/2,H-SHAPE_H/2,'square',BASE_SHAPE_W,SHAPE_H,{isStatic:true,friction:0.95});
+  base.shapeName='square'; base.shapeColor=SHAPES[0].color;
+  Matter.Composite.add(engine.world,base);
+  blocks.push(base);
+  stackTopY=base.position.y;
+  failY=base.position.y+SHAPE_H/2; // a piece resting at or below the base's bottom edge has toppled
+
+  spawnBlock();
+  document.getElementById('score').textContent='0';
+  document.getElementById('bestVal').textContent=save.best;
+  document.getElementById('combo').classList.remove('show');
+  document.getElementById('coinsEarned').classList.remove('show');
+  updateCoinDisplays();
+}
+function showMenu(){
+  playSfx(sfx.clickUI);
+  state='menu';
+  document.getElementById('overlay').classList.remove('show');
+  document.getElementById('shop').classList.remove('show');
+  document.getElementById('ui').style.display='none';
+  document.getElementById('menuBestVal').textContent=save.best;
+  updateCoinDisplays();
+  document.getElementById('menu').classList.add('show');
+}
+function showShop(){
+  playSfx(sfx.clickUI);
+  document.getElementById('menu').classList.remove('show');
+  renderShop(); updateCoinDisplays();
+  document.getElementById('shop').classList.add('show');
+}
+function randShape(){return SHAPES[Math.floor(Math.random()*SHAPES.length)];}
+function spawnBlock(){
+  const dir=Math.random()<0.5?-1:1;
+  const s=randShape();
+  current={cx: dir>0? -BLOCK_W/2 : W+BLOCK_W/2, cy:topOfStackY()-SHAPE_H/2-10*DPR, dir, shape:s.name, color:s.color};
+}
+// Live top surface of the whole tower (rotation-aware, via each body's real bounds) so the
+// aiming piece and spawn height always track the tower's actual current shape, not a stale one.
+function topOfStackY(){
+  let top=Infinity;
+  for(const b of blocks) if(b.bounds.min.y<top) top=b.bounds.min.y;
+  return top;
+}
+function burst(x,y,color,n=16){
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, sp=(1+Math.random()*3.5)*DPR;
+    particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,color});
+  }
+}
+function normAngle(a){a=a%(Math.PI*2);if(a>Math.PI)a-=Math.PI*2;if(a<-Math.PI)a+=Math.PI*2;return a;}
+
+function drop(){
+  if(state!=='play'||!current) return;
+  playSfx(sfx.clickDrop);
+  // The higher the tower, the slipperier pieces get — friction decays per level climbed,
+  // floored so it never becomes uncontrollable.
+  const heightLevel=blocks.length-1;
+  const liveFriction=Math.max(0.35,pieceFriction-heightLevel*0.02);
+  const body=makeBody(current.cx,current.cy-14*DPR,current.shape,SHAPE_W,SHAPE_H,{friction:liveFriction,frictionStatic:liveFriction+0.25,restitution:0.02,density:0.0025});
+  body.shapeName=current.shape; body.shapeColor=current.color;
+  Matter.Composite.add(engine.world,body);
+  fallingBody=body; settleTimer=0; spawnFrames=0;
+  current=null;
+}
+function resolveFall(){
+  // By the time this runs, the continuous per-frame scan in update() has already sent
+  // anything that fell to or below the base to triggerGameOver() — so a piece only ever
+  // reaches here still resting above that line, and always counts as placed.
+  const b=fallingBody;
+  const last=blocks[blocks.length-1];
+  const dx=Math.abs(b.position.x-last.position.x);
+  const perfect=dx<BLOCK_W*0.1 && Math.abs(normAngle(b.angle))<0.15;
+  if(perfect){combo++;shake=Math.min(shake+3*DPR,8*DPR);burst(b.position.x,b.position.y,b.shapeColor,14+combo*3);}
+  else combo=0;
+  blocks.push(b);
+  stackTopY=b.position.y;
+  score+=perfect?1+combo:1;
+  if(score>save.best){ save.best=score; persist(); }
+  document.getElementById('score').textContent=score;
+  document.getElementById('bestVal').textContent=save.best;
+  const comboEl=document.getElementById('combo');
+  if(combo>=2){comboEl.textContent='COMBO x'+combo;comboEl.classList.add('show');}
+  else comboEl.classList.remove('show');
+  camTarget=Math.max(0,H*0.55-b.position.y);
+  speed=Math.min(maxSpeed,speed+speedInc);
+  fallingBody=null;
+  spawnBlock();
+
+  if(gustState==='none'){
+    placementsSinceGust++;
+    if(placementsSinceGust>=GUST_EVERY){
+      placementsSinceGust=0;
+      gustState='warning'; gustTimer=GUST_WARN_FRAMES; gustDir=Math.random()<0.5?-1:1;
+      const w=document.getElementById('windWarning');
+      w.textContent=(gustDir<0?'⬅️':'➡️')+' WIND INCOMING '+(gustDir<0?'⬅️':'➡️');
+      w.classList.add('show');
+    }
+  }
+}
+function triggerGameOver(){
+  state='over';
+  if(pokiSDK) pokiSDK.gameplayStop();
+  playSfx(sfx.gameOver);
+  document.getElementById('ui').style.display='none';
+  document.getElementById('windWarning').classList.remove('show');
+  document.getElementById('windSurvived').classList.remove('show');
+  const coinsEarned=score;
+  save.coins+=coinsEarned;
+  persist();
+  setTimeout(()=>{
+    document.getElementById('finalScore').textContent='Score: '+score;
+    const ce=document.getElementById('coinsEarned');
+    ce.textContent='+'+coinsEarned+' 🪙 earned';
+    ce.classList.add('show');
+    updateCoinDisplays();
+    document.getElementById('overlay').classList.add('show');
+  },900);
+}
+function update(){
+  if(state==='menu') return;
+  if(state==='play' && current){
+    current.cx += current.dir*speed;
+    if(current.dir>0 && current.cx>W+BLOCK_W/2) current.cx=W+BLOCK_W/2;
+    if(current.dir<0 && current.cx< -BLOCK_W/2) current.cx=-BLOCK_W/2;
+    if(current.cx-BLOCK_W/2<=0 && current.dir<0) current.dir=1;
+    if(current.cx+BLOCK_W/2>=W && current.dir>0) current.dir=-1;
+    current.cy=topOfStackY()-SHAPE_H/2-10*DPR;
+  }
+  Matter.Engine.update(engine,1000/60);
+
+  // Any object at all — a piece already placed, or the one currently falling — counts as
+  // toppled the instant it ends up at or below the base block, regardless of which piece it is.
+  if(state==='play'){
+    for(let i=1;i<blocks.length;i++){
+      if(blocks[i].position.y>=failY){
+        const b=blocks.splice(i,1)[0];
+        strayBodies.push(b);
+        if(b===fallingBody) fallingBody=null;
+        shake=10*DPR;
+        triggerGameOver();
+        break;
+      }
+    }
+  }
+  if(state==='play' && fallingBody){
+    spawnFrames++;
+    const b=fallingBody;
+    const spd=Math.hypot(b.velocity.x,b.velocity.y)+Math.abs(b.angularVelocity)*15;
+    if(spd<0.05) settleTimer++; else settleTimer=0;
+    if(b.position.y>=failY){ strayBodies.push(b); fallingBody=null; shake=10*DPR; triggerGameOver(); }
+    else if(b.position.y>H+400*DPR){ strayBodies.push(b); fallingBody=null; shake=10*DPR; triggerGameOver(); }
+    else if(settleTimer>16 || spawnFrames>240) resolveFall();
+  }
+  if(state==='play' && gustState==='warning'){
+    gustTimer--;
+    if(gustTimer<=0){
+      gustState='active'; gustTimer=GUST_ACTIVE_FRAMES;
+      document.getElementById('windWarning').classList.remove('show');
+    }
+  } else if(state==='play' && gustState==='active'){
+    gustTimer--;
+    // Shaped as a gentle rise-and-fall puff (peaks at the middle of the window) rather than
+    // a flat sustained shove, and tuned to be a small nudge, not a gale.
+    const envelope=Math.sin(Math.PI*(1-gustTimer/GUST_ACTIVE_FRAMES));
+    const heightLevel=blocks.length-1;
+    const accel=(0.00045+gustsSurvived*0.00003+heightLevel*0.000025)*DPR*gustDir*envelope;
+    for(let i=1;i<blocks.length;i++){
+      const b=blocks[i];
+      Matter.Sleeping.set(b,false);
+      Matter.Body.applyForce(b,b.position,{x:accel*b.mass,y:0});
+    }
+    if(fallingBody){ Matter.Body.applyForce(fallingBody,fallingBody.position,{x:accel*fallingBody.mass,y:0}); }
+    if(Math.random()<0.5) windParticles.push({x:gustDir>0?-20*DPR:W+20*DPR,y:Math.random()*H,vx:gustDir*(9+Math.random()*5)*DPR,life:1});
+    if(gustTimer<=0){
+      gustState='none';
+      gustsSurvived++;
+      if(state==='play'){
+        score+=2; save.coins+=3; persist();
+        document.getElementById('score').textContent=score;
+        updateCoinDisplays();
+        burst(W/2,H*0.28,'#8ecdfa',18);
+        const sEl=document.getElementById('windSurvived');
+        sEl.classList.add('show');
+        setTimeout(()=>sEl.classList.remove('show'),1100);
+      }
+    }
+  }
+  for(const p of windParticles){ p.x+=p.vx; p.life-=0.012; }
+  windParticles=windParticles.filter(p=>p.life>0 && p.x>-60*DPR && p.x<W+60*DPR);
+
+  camY += (camTarget-camY)*0.12;
+  shake *= 0.85;
+  for(const p of particles){ p.x+=p.vx;p.y+=p.vy;p.vy+=0.15*DPR;p.life-=0.03; }
+  particles=particles.filter(p=>p.life>0);
+}
+// Draws from the exact same vertex data used for the physics hitbox (shapeVerts), so the
+// rendered silhouette and the collision shape are always perfectly aligned.
+function shapePath(shape,w,h){
+  const pts=shapeVerts(shape,w,h);
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x,pts[0].y);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y);
+  ctx.closePath();
+}
+function drawBody(b){
+  ctx.save();
+  ctx.translate(b.position.x,b.position.y);
+  ctx.rotate(b.angle);
+  ctx.fillStyle=b.shapeColor;
+  shapePath(b.shapeName,b.shapeW,b.shapeH);
+  ctx.fill();
+  ctx.restore();
+}
+// Purely decorative backdrop: a soft gradient plus large, slowly drifting versions of the
+// game's own shapes, rendered in screen space (never scrolls with the tower) so it stays
+// lively behind the menu and gameplay without competing with the foreground for attention.
+const BG_SHAPES=(function(){
+  const palette=['#ff5d73','#5dc9ff','#ffd93d','#4dffa8','#c98bff','#ff9f4d'];
+  const kinds=['circle','triangle','hexagon','diamond','pentagon','square'];
+  const arr=[];
+  for(let i=0;i<9;i++){
+    arr.push({
+      xr:Math.random(), yr:Math.random(),
+      size:110+Math.random()*170,
+      color:palette[i%palette.length],
+      kind:kinds[i%kinds.length],
+      phase:Math.random()*Math.PI*2,
+      speed:0.00007+Math.random()*0.00006,
+      amp:18+Math.random()*26,
+      rot:Math.random()*Math.PI*2,
+      rotSpeed:(Math.random()-0.5)*0.00012
+    });
+  }
+  return arr;
+})();
+function drawBackground(){
+  const g=ctx.createLinearGradient(0,0,W,H);
+  g.addColorStop(0,'#231348');
+  g.addColorStop(0.55,'#161c40');
+  g.addColorStop(1,'#0e2340');
+  ctx.fillStyle=g;
+  ctx.fillRect(0,0,W,H);
+  const t=Date.now();
+  for(const s of BG_SHAPES){
+    const cx=s.xr*W+Math.sin(t*s.speed+s.phase)*s.amp*DPR;
+    const cy=s.yr*H+Math.cos(t*s.speed*0.8+s.phase)*s.amp*DPR;
+    ctx.save();
+    ctx.globalAlpha=0.24;
+    ctx.translate(cx,cy);
+    ctx.rotate(s.rot+t*s.rotSpeed);
+    ctx.fillStyle=s.color;
+    shapePath(s.kind,s.size*DPR,s.size*DPR);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha=1;
+}
+function draw(){
+  drawBackground();
+  if(state==='menu') return;
+  ctx.save();
+  const sx=(Math.random()-0.5)*shake, sy=(Math.random()-0.5)*shake;
+  ctx.translate(sx,sy+camY);
+  for(const b of blocks) drawBody(b);
+  if(fallingBody) drawBody(fallingBody);
+  for(const b of strayBodies){ if(b.position.y<H+450*DPR) drawBody(b); }
+  if(current && state==='play'){
+    ctx.save();
+    ctx.translate(current.cx,current.cy);
+    ctx.fillStyle=current.color;
+    shapePath(current.shape,SHAPE_W,SHAPE_H);
+    ctx.fill();
+    ctx.restore();
+  }
+  for(const p of particles){
+    ctx.globalAlpha=Math.max(p.life,0);
+    ctx.fillStyle=p.color;
+    ctx.beginPath();ctx.arc(p.x,p.y,4*DPR*p.life+1,0,7);ctx.fill();
+    ctx.globalAlpha=1;
+  }
+  ctx.restore();
+
+  // Wind streaks render in screen space (not scrolled with the camera) — an atmospheric
+  // effect blowing across the whole view, independent of how tall the tower has grown.
+  if(gustState==='active'){
+    ctx.fillStyle='rgba(142,205,250,'+(0.05+0.03*Math.sin(Date.now()*0.01))+')';
+    ctx.fillRect(0,0,W,H);
+  }
+  ctx.strokeStyle='rgba(142,205,250,.5)';
+  ctx.lineWidth=2*DPR;
+  ctx.lineCap='round';
+  for(const p of windParticles){
+    ctx.globalAlpha=Math.max(p.life,0);
+    ctx.beginPath();
+    ctx.moveTo(p.x,p.y);
+    ctx.lineTo(p.x-Math.sign(p.vx)*22*DPR,p.y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+}
+function loop(){update();draw();requestAnimationFrame(loop);}
+window.addEventListener('pointerdown',e=>{
+  if(state==='play' && !e.target.closest('button')) drop();
+});
+window.addEventListener('keydown',e=>{
+  if(e.code==='Space'){
+    e.preventDefault();
+    if(state==='play') drop();
+  }
+});
+state='menu';
+document.getElementById('ui').style.display='none';
+document.getElementById('muteBtn').textContent=save.muted?'🔇':'🔊';
+updateCoinDisplays();
+document.getElementById('menuBestVal').textContent=save.best;
+draw();
+loop();
+if(pokiSDK) pokiSDK.gameLoadingFinished();
+</script>
+</body>
+</html>
