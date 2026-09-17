@@ -234,15 +234,18 @@ function shapeVerts(shape,w,h){
       for(let i=0;i<N;i++){ const a=i/N*Math.PI*2; pts.push({x:Math.cos(a)*hw,y:Math.sin(a)*hh}); }
       break;
     }
+    // Sharp single-point tips are a real physics problem, not just a look: anything resting
+    // on a true point is a knife-edge equilibrium in a rigid-body sim. These tips are clipped
+    // into small flat edges — still clearly a triangle/diamond/pentagon, just able to actually
+    // hold weight. Diamond gets it on both ends since it's pointed top and bottom.
     case 'triangle':
-      pts=[{x:0,y:-hh},{x:hw,y:hh},{x:-hw,y:hh}]; break;
+      pts=[{x:-hw*0.38,y:-hh},{x:hw*0.38,y:-hh},{x:hw,y:hh},{x:-hw,y:hh}]; break;
     case 'diamond':
-      pts=[{x:0,y:-hh},{x:hw,y:0},{x:0,y:hh},{x:-hw,y:0}]; break;
+      pts=[{x:-hw*0.35,y:-hh},{x:hw*0.35,y:-hh},{x:hw,y:0},{x:hw*0.35,y:hh},{x:-hw*0.35,y:hh},{x:-hw,y:0}]; break;
     case 'hexagon':
       pts=[{x:-hw*0.5,y:-hh},{x:hw*0.5,y:-hh},{x:hw,y:0},{x:hw*0.5,y:hh},{x:-hw*0.5,y:hh},{x:-hw,y:0}]; break;
     case 'pentagon':
-      pts=[];
-      for(let i=0;i<5;i++){ const a=-Math.PI/2+i*(Math.PI*2/5); pts.push({x:Math.cos(a)*hw,y:Math.sin(a)*hh}); }
+      pts=[{x:-hw*0.35,y:-hh},{x:hw*0.35,y:-hh},{x:hw*0.951,y:-hh*0.309},{x:hw*0.588,y:hh*0.809},{x:-hw*0.588,y:hh*0.809},{x:-hw*0.951,y:-hh*0.309}];
       break;
     default:
       pts=[{x:-hw,y:-hh},{x:hw,y:-hh},{x:hw,y:hh},{x:-hw,y:hh}];
