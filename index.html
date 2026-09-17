@@ -505,6 +505,28 @@ function shapePath(shape,w,h){
   for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y);
   ctx.closePath();
 }
+// Eye sockets are drawn in the shape's own rotated frame (so they sit fixed on its surface),
+// but the pupils counter-rotate by -angle so they stay weighted toward true world-down —
+// exactly how a real googly eye's loose disc settles under gravity, regardless of the
+// shape's own spin. Angle 0 (the aiming piece, never rotated) just looks straight down.
+function drawEyes(angle,w,h){
+  const eyeR=h*0.16, pupilR=eyeR*0.42, offX=w*0.15;
+  for(const side of [-1,1]){
+    const ex=side*offX;
+    ctx.beginPath();
+    ctx.fillStyle='#fff';
+    ctx.arc(ex,0,eyeR,0,Math.PI*2);
+    ctx.fill();
+    ctx.save();
+    ctx.translate(ex,0);
+    ctx.rotate(-angle);
+    ctx.fillStyle='#222';
+    ctx.beginPath();
+    ctx.arc(0,eyeR-pupilR,pupilR,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
 function drawBody(b){
   ctx.save();
   ctx.translate(b.position.x,b.position.y);
@@ -512,6 +534,7 @@ function drawBody(b){
   ctx.fillStyle=b.shapeColor;
   shapePath(b.shapeName,b.shapeW,b.shapeH);
   ctx.fill();
+  drawEyes(b.angle,b.shapeW,b.shapeH);
   ctx.restore();
 }
 // Purely decorative backdrop: a soft gradient plus large, slowly drifting versions of the
@@ -573,6 +596,7 @@ function draw(){
     ctx.fillStyle=current.color;
     shapePath(current.shape,SHAPE_W,SHAPE_H);
     ctx.fill();
+    drawEyes(0,SHAPE_W,SHAPE_H);
     ctx.restore();
   }
   for(const p of particles){
