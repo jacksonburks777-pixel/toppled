@@ -74,7 +74,7 @@
   <h1>TOPPLED!</h1>
   <div id="menuBest">Best score: <b id="menuBestVal">0</b></div>
   <div class="preview">
-    <span style="background:#ff5d73"></span><span style="background:#ffd93d"></span><span style="background:#4dffb8"></span><span style="background:#c98bff"></span><span style="background:#ff9f4d"></span>
+    <span style="background:#ff5d73"></span><span style="background:#ffd93d"></span><span style="background:#4dffb8"></span><span style="background:#c98bff"></span><span style="background:#ff9f4d"></span><span style="background:#5dc9ff"></span>
   </div>
   <p>Tap to drop the shape onto the stack. Real physics decides what happens next — land off-balance and it topples for real.</p>
   <button onclick="requestStartGame()">PLAY</button>
@@ -114,7 +114,8 @@ const SHAPES=[
   {name:'triangle',color:'#ffd93d'},
   {name:'hexagon', color:'#4dffb8'},
   {name:'diamond', color:'#c98bff'},
-  {name:'pentagon',color:'#ff9f4d'}
+  {name:'pentagon',color:'#ff9f4d'},
+  {name:'octagon', color:'#5dc9ff'}
 ];
 let BLOCK_W, BLOCK_H, SHAPE_W, SHAPE_H, BASE_SHAPE_W;
 let engine,blocks,strayBodies,current,fallingBody,settleTimer,spawnFrames;
@@ -250,6 +251,11 @@ function shapeVerts(shape,w,h){
     case 'pentagon':
       pts=[{x:-hw*0.35,y:-hh},{x:hw*0.35,y:-hh},{x:hw*0.951,y:-hh*0.309},{x:hw*0.588,y:hh*0.809},{x:-hw*0.588,y:hh*0.809},{x:-hw*0.951,y:-hh*0.309}];
       break;
+    case 'octagon':
+      // Flat top, bottom, left and right — a stop-sign shape, just as easy to rest on or
+      // stack under as square/hexagon, with corners chamfered instead of squared off.
+      pts=[{x:-hw*0.42,y:-hh},{x:hw*0.42,y:-hh},{x:hw,y:-hh*0.42},{x:hw,y:hh*0.42},{x:hw*0.42,y:hh},{x:-hw*0.42,y:hh},{x:-hw,y:hh*0.42},{x:-hw,y:-hh*0.42}];
+      break;
     default:
       pts=[{x:-hw,y:-hh},{x:hw,y:-hh},{x:hw,y:hh},{x:-hw,y:hh}];
   }
@@ -289,6 +295,11 @@ function startGame(){
   document.getElementById('windSurvived').classList.remove('show');
   state='play';
   if(pokiSDK) pokiSDK.gameplayStart();
+  // Belt-and-suspenders: don't rely solely on the pointerdown unlock or the Poki
+  // commercial-break callback actually resuming playback — every real game start
+  // makes its own direct attempt, so a stalled music track never needs a mute toggle to fix.
+  audioUnlocked=true;
+  if(!save.muted) bgMusic.play().catch(()=>{});
 
   const base=makeBody(W/2,H-SHAPE_H/2,'square',BASE_SHAPE_W,SHAPE_H,{isStatic:true,friction:0.95});
   base.shapeName='square'; base.shapeColor=SHAPES[0].color;
@@ -323,7 +334,7 @@ function showShop(){
 // Square and hexagon have full-width flat contact on every side — the "easy" shapes.
 // Triangle/diamond/pentagon are stackable now but still taper to a narrower resting patch.
 // Early climbs lean easy; the pool shifts toward the harder shapes the higher the tower gets.
-const EASY_SHAPES=SHAPES.filter(s=>s.name==='square'||s.name==='hexagon');
+const EASY_SHAPES=SHAPES.filter(s=>s.name==='square'||s.name==='hexagon'||s.name==='octagon');
 const HARD_SHAPES=SHAPES.filter(s=>s.name==='triangle'||s.name==='diamond'||s.name==='pentagon');
 function randShape(){
   const heightLevel=blocks.length-1;
@@ -420,6 +431,7 @@ function triggerGameOver(){
 }
 function update(){
   if(state==='menu') return;
+  frameCount++;
   if(state==='play' && current){
     current.cx += current.dir*speed;
     if(current.dir>0 && current.cx>W+BLOCK_W/2) current.cx=W+BLOCK_W/2;
@@ -466,9 +478,10 @@ function update(){
     // a flat sustained shove, and tuned to be a small nudge, not a gale.
     const envelope=Math.sin(Math.PI*(1-gustTimer/GUST_ACTIVE_FRAMES));
     const heightLevel=blocks.length-1;
-    // Wind still gets a little stronger with height, but much less than grip/shape difficulty do —
-    // the height term here is deliberately small.
-    const accel=(0.00045+gustsSurvived*0.00003+heightLevel*0.000012)*DPR*gustDir*envelope;
+    // Wind still gets a little stronger with height/survived gusts, but it's hard-capped —
+    // no matter how high the score climbs, this never grows past a light gust.
+    const baseAccel=Math.min(0.0006,0.00045+gustsSurvived*0.00003+heightLevel*0.000012);
+    const accel=baseAccel*DPR*gustDir*envelope;
     for(let i=1;i<blocks.length;i++){
       const b=blocks[i];
       Matter.Sleeping.set(b,false);
@@ -530,9 +543,11 @@ function updateEye(holder){
   e.timer--;
   if(e.timer<=0){
     e.timer=45+Math.random()*90;
-    if(Math.random()<0.55){ e.targetX=0; e.targetY=0; } // rest, settling back toward gravity-down
+    // Rest is a gentle default downward gaze, but glances can land anywhere on the full
+    // circle — including straight up — not just around that default.
+    if(Math.random()<0.55){ e.targetX=0; e.targetY=0.35; }
     else{
-      const ang=Math.random()*Math.PI*2, mag=0.3+Math.random()*0.55;
+      const ang=Math.random()*Math.PI*2, mag=0.4+Math.random()*0.6;
       e.targetX=Math.cos(ang)*mag; e.targetY=Math.sin(ang)*mag;
     }
   }
@@ -549,23 +564,28 @@ function updateEye(holder){
 }
 // A real hit — landing hard, getting bumped by a neighbor, catching a wind-blown piece —
 // snaps eyes shut for a beat. Driven off Matter's actual collision event + impact speed,
-// not guessed from game state, so it fires for whichever two bodies really collided.
+// not guessed from game state. A new body settling into a stack can trigger a burst of
+// simultaneous low-speed contacts as the whole pile resettles — a stiffer speed threshold
+// plus a short per-piece cooldown keeps that from reading as "everyone flinches at once".
+let frameCount=0;
 function flinch(b){
   if(!b) return;
   const e=ensureEye(b);
+  if(e.lastFlinchFrame!==undefined && frameCount-e.lastFlinchFrame<30) return;
+  e.lastFlinchFrame=frameCount;
   e.forceCloseTimer=Math.max(e.forceCloseTimer,16);
 }
 function handleCollision(event){
   for(const pair of event.pairs){
     const {bodyA,bodyB}=pair;
     const rvx=bodyA.velocity.x-bodyB.velocity.x, rvy=bodyA.velocity.y-bodyB.velocity.y;
-    if(Math.hypot(rvx,rvy)>1.6*DPR){ flinch(bodyA); flinch(bodyB); }
+    if(Math.hypot(rvx,rvy)>4.5*DPR){ flinch(bodyA); flinch(bodyB); }
   }
 }
 // Eye sockets are drawn in the shape's own rotated frame (so they sit fixed on its surface),
-// but the pupils counter-rotate by -angle so their gravity-down resting bias stays true to
-// world-down regardless of the shape's own spin — the independent look-around/blink state
-// (eye) rides on top of that. Closed (blinking or force-closed) draws a simple lash instead.
+// but the pupils counter-rotate by -angle so the look-around/blink state (eye) always reads
+// in world space — a glance "up" stays up no matter how the shape itself has rotated.
+// Closed (blinking or force-closed) draws a simple lash instead.
 function drawEyes(angle,w,h,eye){
   const eyeR=h*0.16, pupilR=eyeR*0.42, offX=w*0.15;
   const closed=eye&&(eye.blinking||eye.forceCloseTimer>0);
@@ -588,7 +608,7 @@ function drawEyes(angle,w,h,eye){
     ctx.translate(ex,0);
     ctx.rotate(-angle);
     const maxOff=eyeR-pupilR;
-    let px=(eye?eye.lookX:0)*maxOff, py=maxOff+(eye?eye.lookY:0)*maxOff*0.6;
+    let px=(eye?eye.lookX:0)*maxOff, py=(eye?eye.lookY:0)*maxOff;
     const dist=Math.hypot(px,py);
     if(dist>maxOff){ px*=maxOff/dist; py*=maxOff/dist; }
     ctx.fillStyle='#222';
