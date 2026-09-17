@@ -35,6 +35,7 @@
   .btnrow{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;}
   button{font-size:20px;padding:12px 30px;border:none;border-radius:30px;background:#ff5d73;color:#fff;cursor:pointer;box-shadow:0 6px 16px rgba(255,93,115,.4);font-weight:600;font-family:inherit;}
   button.secondary{background:rgba(255,255,255,.12);box-shadow:none;font-size:16px;padding:10px 24px;}
+  button.secondary.on{background:rgba(255,217,61,.28);border:1px solid rgba(255,217,61,.6);color:#ffd93d;}
   button:active{transform:scale(.95);}
   button:disabled{opacity:.35;cursor:default;transform:none;}
   .navRow{margin-top:18px;}
@@ -80,6 +81,7 @@
   <button onclick="requestStartGame()">PLAY</button>
   <div class="btnrow navRow">
     <button class="secondary" onclick="showShop()">Shop</button>
+    <button class="secondary" id="spinToggle" onclick="toggleSpinMode()">🌀 Spin Mode: OFF</button>
   </div>
 </div>
 
@@ -98,6 +100,8 @@
     <button onclick="requestStartGame()">Restart</button>
     <button class="secondary" onclick="showMenu()">Menu</button>
   </div>
+  <p class="subtle" style="margin-top:22px;">Spend what you just earned</p>
+  <div class="shopList" id="overlayShopList"></div>
 </div>
 
 <!-- Poki SDK intentionally omitted from this public demo build: it flags unapproved
@@ -121,10 +125,20 @@ let BLOCK_W, BLOCK_H, SHAPE_W, SHAPE_H, BASE_SHAPE_W;
 let engine,blocks,strayBodies,current,fallingBody,settleTimer,spawnFrames;
 let camY,camTarget,score,particles,shake,state,speed,combo,stackTopY,failY;
 let pieceFriction,baseSpeed,maxSpeed,speedInc;
+// Spin mode: an optional twist where the aiming piece also spins while it slides, so you're
+// timing rotation as well as position. The physics body it becomes on drop inherits whatever
+// angle it was actually at, so a bad release genuinely lands crooked, not just off-center.
+let spinMode=false;
+function toggleSpinMode(){
+  spinMode=!spinMode;
+  const btn=document.getElementById('spinToggle');
+  btn.textContent='🌀 Spin Mode: '+(spinMode?'ON':'OFF');
+  btn.classList.toggle('on',spinMode);
+}
 // Wind gust twist: every few placements, a telegraphed gust shoves the whole standing
 // tower sideways for real (via Matter forces) — Grip directly helps resist it.
 let gustState,gustTimer,gustDir,placementsSinceGust,gustsSurvived,windParticles;
-const GUST_EVERY=14, GUST_WARN_FRAMES=80, GUST_ACTIVE_FRAMES=40;
+const GUST_EVERY=9, GUST_WARN_FRAMES=80, GUST_ACTIVE_FRAMES=40;
 
 // ---- Save data: coins, personal best, upgrade levels, mute preference (localStorage only) ----
 const SAVE_KEY='shapeStackerSave_v1';
@@ -203,27 +217,32 @@ function buyUpgrade(key){
   save.coins-=cost; save.upg[key]=lvl+1;
   persist(); renderShop(); updateCoinDisplays();
 }
+// Renders into every shop-list container currently in the page — the standalone Shop
+// screen and the one embedded straight into the game-over overlay — so either stays in
+// sync with a single call, regardless of which one the player's actually looking at.
 function renderShop(){
-  const list=document.getElementById('shopList');
-  list.innerHTML='';
-  for(const u of UPGRADES){
-    const lvl=save.upg[u.key], maxed=lvl>=u.max, cost=maxed?0:upgradeCost(u);
-    const afford=!maxed && save.coins>=cost;
-    const pct=Math.round(lvl/u.max*100);
-    const card=document.createElement('div');
-    card.className='upgradeCard';
-    card.innerHTML=
-      '<div class="upgradeIcon">'+u.icon+'</div>'+
-      '<div class="upgradeInfo"><div class="name">'+u.name+'</div>'+
-      '<div class="desc">'+u.desc+'</div>'+
-      '<div class="levelBarTrack"><div class="levelBarFill" style="width:'+pct+'%"></div></div>'+
-      '<div class="levelText">Lv '+lvl+'/'+u.max+'</div></div>'+
-      '<button class="buyBtn'+(maxed?' maxed':'')+'" '+(maxed||!afford?'disabled':'')+' data-key="'+u.key+'">'+(maxed?'MAX':'🪙 '+cost)+'</button>';
-    list.appendChild(card);
+  const lists=['shopList','overlayShopList'].map(id=>document.getElementById(id)).filter(Boolean);
+  for(const list of lists){
+    list.innerHTML='';
+    for(const u of UPGRADES){
+      const lvl=save.upg[u.key], maxed=lvl>=u.max, cost=maxed?0:upgradeCost(u);
+      const afford=!maxed && save.coins>=cost;
+      const pct=Math.round(lvl/u.max*100);
+      const card=document.createElement('div');
+      card.className='upgradeCard';
+      card.innerHTML=
+        '<div class="upgradeIcon">'+u.icon+'</div>'+
+        '<div class="upgradeInfo"><div class="name">'+u.name+'</div>'+
+        '<div class="desc">'+u.desc+'</div>'+
+        '<div class="levelBarTrack"><div class="levelBarFill" style="width:'+pct+'%"></div></div>'+
+        '<div class="levelText">Lv '+lvl+'/'+u.max+'</div></div>'+
+        '<button class="buyBtn'+(maxed?' maxed':'')+'" '+(maxed||!afford?'disabled':'')+' data-key="'+u.key+'">'+(maxed?'MAX':'🪙 '+cost)+'</button>';
+      list.appendChild(card);
+    }
+    list.querySelectorAll('.buyBtn').forEach(btn=>{
+      if(!btn.disabled) btn.addEventListener('click',()=>buyUpgrade(btn.dataset.key));
+    });
   }
-  list.querySelectorAll('.buyBtn').forEach(btn=>{
-    if(!btn.disabled) btn.addEventListener('click',()=>buyUpgrade(btn.dataset.key));
-  });
 }
 
 // Local (centered-at-origin) outline for each shape, matching shapePath() exactly, so the
@@ -354,7 +373,8 @@ function randomBrightColor(){
 function spawnBlock(){
   const dir=Math.random()<0.5?-1:1;
   const s=randShape();
-  current={cx: dir>0? -BLOCK_W/2 : W+BLOCK_W/2, cy:topOfStackY()-SHAPE_H/2-10*DPR, dir, shape:s.name, color:randomBrightColor()};
+  current={cx: dir>0? -BLOCK_W/2 : W+BLOCK_W/2, cy:topOfStackY()-SHAPE_H/2-90*DPR, dir, shape:s.name, color:randomBrightColor(), angle:0,
+    spinSpeed: spinMode?(Math.random()<0.5?-1:1)*(0.05+Math.random()*0.04):0};
 }
 // Live top surface of the whole tower (rotation-aware, via each body's real bounds) so the
 // aiming piece and spawn height always track the tower's actual current shape, not a stale one.
@@ -381,6 +401,7 @@ function drop(){
   const body=makeBody(current.cx,current.cy-14*DPR,current.shape,SHAPE_W,SHAPE_H,{friction:liveFriction,frictionStatic:liveFriction+0.25,restitution:0.02,density:0.0025});
   body.shapeName=current.shape; body.shapeColor=current.color;
   body.eye=current.eye; // carry the aiming piece's eye state over — same face, not a fresh random one
+  if(spinMode) Matter.Body.setAngle(body,current.angle); // lands however it was actually spinning at release
   Matter.Composite.add(engine.world,body);
   fallingBody=body; settleTimer=0; spawnFrames=0;
   current=null;
@@ -436,6 +457,7 @@ function triggerGameOver(){
     ce.textContent='+'+coinsEarned+' 🪙 earned';
     ce.classList.add('show');
     updateCoinDisplays();
+    renderShop(); // shop is right there on the death screen — no menu/shop navigation needed
     document.getElementById('overlay').classList.add('show');
   },900);
 }
@@ -448,7 +470,8 @@ function update(){
     if(current.dir<0 && current.cx< -BLOCK_W/2) current.cx=-BLOCK_W/2;
     if(current.cx-BLOCK_W/2<=0 && current.dir<0) current.dir=1;
     if(current.cx+BLOCK_W/2>=W && current.dir>0) current.dir=-1;
-    current.cy=topOfStackY()-SHAPE_H/2-10*DPR;
+    current.cy=topOfStackY()-SHAPE_H/2-90*DPR;
+    if(spinMode) current.angle+=current.spinSpeed;
   }
   Matter.Engine.update(engine,1000/60);
 
@@ -490,7 +513,7 @@ function update(){
     const heightLevel=blocks.length-1;
     // Wind still gets a little stronger with height/survived gusts, but it's hard-capped —
     // no matter how high the score climbs, this never grows past a light gust.
-    const baseAccel=Math.min(0.0006,0.00045+gustsSurvived*0.00003+heightLevel*0.000012);
+    const baseAccel=Math.min(0.00045,0.00032+gustsSurvived*0.00002+heightLevel*0.000008);
     const accel=baseAccel*DPR*gustDir*envelope;
     for(let i=1;i<blocks.length;i++){
       const b=blocks[i];
@@ -724,6 +747,7 @@ function draw(){
   if(current && state==='play'){
     ctx.save();
     ctx.translate(current.cx,current.cy);
+    ctx.rotate(current.angle||0);
     ctx.fillStyle=current.color;
     shapePath(current.shape,SHAPE_W,SHAPE_H);
     ctx.fill();
