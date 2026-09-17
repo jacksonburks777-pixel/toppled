@@ -537,12 +537,39 @@ function shapePath(shape,w,h){
 // ---- Eye behavior: each piece owns its own eye state (attached directly to the Matter body,
 // or to `current`/decorative shapes as a plain object), so every face looks around, blinks,
 // and reacts entirely independently of every other piece. ----
+function pointInPolygon(px,py,pts){
+  let inside=false;
+  for(let i=0,j=pts.length-1;i<pts.length;j=i++){
+    const xi=pts[i].x, yi=pts[i].y, xj=pts[j].x, yj=pts[j].y;
+    if(((yi>py)!==(yj>py)) && (px<(xj-xi)*(py-yi)/(yj-yi)+xi)) inside=!inside;
+  }
+  return inside;
+}
+// Picks two spots for the eyes that are actually inside the shape's real silhouette (tested
+// against its exact vertices, not just a bounding box), kept apart enough not to overlap.
+function randomEyeSpots(shapeName,w,h){
+  const pts=shapeVerts(shapeName,w,h);
+  const eyeR=h*0.16, minDist=eyeR*2.3;
+  function tryPoint(){
+    for(let a=0;a<25;a++){
+      const px=(Math.random()-0.5)*w*0.6, py=(Math.random()-0.5)*h*0.55;
+      if(pointInPolygon(px,py,pts)) return {x:px,y:py};
+    }
+    return {x:0,y:0};
+  }
+  const p1=tryPoint();
+  let p2=tryPoint(), tries=0;
+  while(Math.hypot(p2.x-p1.x,p2.y-p1.y)<minDist && tries<25){ p2=tryPoint(); tries++; }
+  return [p1,p2];
+}
 function ensureEye(holder){
   if(!holder.eye){
+    const shapeName=holder.shapeName||holder.shape;
+    const w=holder.shapeW||SHAPE_W, h=holder.shapeH||SHAPE_H;
     holder.eye={
       timer:Math.random()*60, lookX:0, lookY:0, targetX:0, targetY:0,
       blinkTimer:90+Math.random()*220, blinking:false, blinkDuration:0,
-      forceCloseTimer:0
+      forceCloseTimer:0, pos:randomEyeSpots(shapeName,w,h)
     };
   }
   return holder.eye;
@@ -595,29 +622,32 @@ function handleCollision(event){
 // but the pupils counter-rotate by -angle so the look-around/blink state (eye) always reads
 // in world space — a glance "up" stays up no matter how the shape itself has rotated.
 // Closed (blinking or force-closed) draws a simple lash instead.
-function drawEyes(angle,w,h,eye){
-  const eyeR=h*0.16, pupilR=eyeR*0.42, offX=w*0.15;
-  const closed=eye&&(eye.blinking||eye.forceCloseTimer>0);
-  for(const side of [-1,1]){
-    const ex=side*offX;
+function drawEyes(holder){
+  const eye=ensureEye(holder);
+  const angle=holder.angle||0;
+  const h=holder.shapeH||SHAPE_H;
+  const eyeR=h*0.16, pupilR=eyeR*0.42;
+  const closed=eye.blinking||eye.forceCloseTimer>0;
+  for(const spot of eye.pos){
+    const ex=spot.x, ey=spot.y;
     if(closed){
       ctx.strokeStyle='#222';
       ctx.lineWidth=Math.max(1.5,eyeR*0.32);
       ctx.lineCap='round';
       ctx.beginPath();
-      ctx.arc(ex,eyeR*0.1,eyeR*0.7,Math.PI*0.15,Math.PI*0.85);
+      ctx.arc(ex,ey+eyeR*0.1,eyeR*0.7,Math.PI*0.15,Math.PI*0.85);
       ctx.stroke();
       continue;
     }
     ctx.beginPath();
     ctx.fillStyle='#fff';
-    ctx.arc(ex,0,eyeR,0,Math.PI*2);
+    ctx.arc(ex,ey,eyeR,0,Math.PI*2);
     ctx.fill();
     ctx.save();
-    ctx.translate(ex,0);
+    ctx.translate(ex,ey);
     ctx.rotate(-angle);
     const maxOff=eyeR-pupilR;
-    let px=(eye?eye.lookX:0)*maxOff, py=(eye?eye.lookY:0)*maxOff;
+    let px=eye.lookX*maxOff, py=eye.lookY*maxOff;
     const dist=Math.hypot(px,py);
     if(dist>maxOff){ px*=maxOff/dist; py*=maxOff/dist; }
     ctx.fillStyle='#222';
@@ -634,7 +664,7 @@ function drawBody(b){
   ctx.fillStyle=b.shapeColor;
   shapePath(b.shapeName,b.shapeW,b.shapeH);
   ctx.fill();
-  drawEyes(b.angle,b.shapeW,b.shapeH,b.eye);
+  drawEyes(b);
   ctx.restore();
 }
 // Purely decorative backdrop: a soft gradient plus large, slowly drifting versions of the
@@ -696,7 +726,7 @@ function draw(){
     ctx.fillStyle=current.color;
     shapePath(current.shape,SHAPE_W,SHAPE_H);
     ctx.fill();
-    drawEyes(0,SHAPE_W,SHAPE_H,current.eye);
+    drawEyes(current);
     ctx.restore();
   }
   for(const p of particles){
