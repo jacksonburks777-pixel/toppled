@@ -51,9 +51,9 @@
   .upgradeInfo{flex:1;min-width:0;}
   .upgradeInfo .name{font-weight:700;font-size:15px;}
   .upgradeInfo .desc{font-size:11px;opacity:.6;margin-top:1px;}
-  .levelDots{display:flex;gap:4px;margin-top:6px;}
-  .levelDot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.18);}
-  .levelDot.filled{background:#ffd93d;}
+  .levelBarTrack{width:100%;height:6px;border-radius:3px;background:rgba(255,255,255,.15);margin-top:7px;overflow:hidden;}
+  .levelBarFill{height:100%;background:#ffd93d;border-radius:3px;}
+  .levelText{font-size:10px;opacity:.55;margin-top:3px;}
   .buyBtn{font-size:13px;padding:9px 14px;border-radius:20px;box-shadow:none;flex-shrink:0;white-space:nowrap;}
   .buyBtn.maxed{background:rgba(77,255,168,.18);color:#4dffa8;}
 </style>
@@ -123,7 +123,7 @@ let pieceFriction,baseSpeed,maxSpeed,speedInc;
 // Wind gust twist: every few placements, a telegraphed gust shoves the whole standing
 // tower sideways for real (via Matter forces) — Grip directly helps resist it.
 let gustState,gustTimer,gustDir,placementsSinceGust,gustsSurvived,windParticles;
-const GUST_EVERY=6, GUST_WARN_FRAMES=80, GUST_ACTIVE_FRAMES=40;
+const GUST_EVERY=10, GUST_WARN_FRAMES=80, GUST_ACTIVE_FRAMES=40;
 
 // ---- Save data: coins, personal best, upgrade levels, mute preference (localStorage only) ----
 const SAVE_KEY='shapeStackerSave_v1';
@@ -186,11 +186,13 @@ function requestStartGame(){
 }
 
 const UPGRADES=[
-  {key:'friction', name:'Grip',       icon:'🧱', desc:'Pieces stick better on landing',    max:5, baseCost:20},
-  {key:'base',     name:'Base Length',icon:'📏', desc:'Wider foundation to build on',      max:5, baseCost:25},
-  {key:'speed',    name:'Slow Swing', icon:'🐌', desc:'Slower back-and-forth motion',      max:5, baseCost:30}
+  {key:'friction', name:'Grip',       icon:'🧱', desc:'Pieces stick better on landing',    max:20, baseCost:20},
+  {key:'base',     name:'Base Length',icon:'📏', desc:'Wider foundation to build on',      max:20, baseCost:25},
+  {key:'speed',    name:'Slow Swing', icon:'🐌', desc:'Slower back-and-forth motion',      max:20, baseCost:30}
 ];
-function upgradeCost(u){ return Math.round(u.baseCost*Math.pow(1.8,save.upg[u.key])); }
+// Gentler growth than a 5-level curve needs, so 20 steps stays a long climb without the
+// cost exploding into the tens of thousands by the top level.
+function upgradeCost(u){ return Math.round(u.baseCost*Math.pow(1.22,save.upg[u.key])); }
 function buyUpgrade(key){
   const u=UPGRADES.find(x=>x.key===key), lvl=save.upg[key];
   if(lvl>=u.max) return;
@@ -206,14 +208,15 @@ function renderShop(){
   for(const u of UPGRADES){
     const lvl=save.upg[u.key], maxed=lvl>=u.max, cost=maxed?0:upgradeCost(u);
     const afford=!maxed && save.coins>=cost;
-    const dots=Array.from({length:u.max}).map((_,i)=>`<span class="levelDot ${i<lvl?'filled':''}"></span>`).join('');
+    const pct=Math.round(lvl/u.max*100);
     const card=document.createElement('div');
     card.className='upgradeCard';
     card.innerHTML=
       '<div class="upgradeIcon">'+u.icon+'</div>'+
       '<div class="upgradeInfo"><div class="name">'+u.name+'</div>'+
       '<div class="desc">'+u.desc+'</div>'+
-      '<div class="levelDots">'+dots+'</div></div>'+
+      '<div class="levelBarTrack"><div class="levelBarFill" style="width:'+pct+'%"></div></div>'+
+      '<div class="levelText">Lv '+lvl+'/'+u.max+'</div></div>'+
       '<button class="buyBtn'+(maxed?' maxed':'')+'" '+(maxed||!afford?'disabled':'')+' data-key="'+u.key+'">'+(maxed?'MAX':'🪙 '+cost)+'</button>';
     list.appendChild(card);
   }
@@ -266,10 +269,13 @@ function startGame(){
   BLOCK_W=145*DPR; BLOCK_H=68*DPR;
   SHAPE_W=BLOCK_W*0.96; SHAPE_H=BLOCK_H*0.9;
 
+  // Rescaled for the 20-level shop: each level is a smaller, smoother step so the full
+  // climb from 0 to max still lands on a sensible total (full grip ~1.15, base up to 400,
+  // swing down to 40% speed at max), instead of the old 5-level increments blowing past those.
   const baseLv=save.upg.base, fricLv=save.upg.friction, speedLv=save.upg.speed;
-  BASE_SHAPE_W=(280+baseLv*15)*DPR*0.96;
-  pieceFriction=0.90+fricLv*0.02;
-  const speedScale=1-speedLv*0.08;
+  BASE_SHAPE_W=(280+baseLv*6)*DPR*0.96;
+  pieceFriction=0.90+fricLv*0.0125;
+  const speedScale=1-speedLv*0.03;
   baseSpeed=4*DPR*speedScale; maxSpeed=9*DPR*speedScale; speedInc=0.15*DPR*speedScale;
 
   engine=Matter.Engine.create();
@@ -313,7 +319,17 @@ function showShop(){
   renderShop(); updateCoinDisplays();
   document.getElementById('shop').classList.add('show');
 }
-function randShape(){return SHAPES[Math.floor(Math.random()*SHAPES.length)];}
+// Square and hexagon have full-width flat contact on every side — the "easy" shapes.
+// Triangle/diamond/pentagon are stackable now but still taper to a narrower resting patch.
+// Early climbs lean easy; the pool shifts toward the harder shapes the higher the tower gets.
+const EASY_SHAPES=SHAPES.filter(s=>s.name==='square'||s.name==='hexagon');
+const HARD_SHAPES=SHAPES.filter(s=>s.name==='triangle'||s.name==='diamond'||s.name==='pentagon');
+function randShape(){
+  const heightLevel=blocks.length-1;
+  const hardChance=Math.min(0.78,0.15+heightLevel*0.03);
+  const pool=Math.random()<hardChance?HARD_SHAPES:EASY_SHAPES;
+  return pool[Math.floor(Math.random()*pool.length)];
+}
 function spawnBlock(){
   const dir=Math.random()<0.5?-1:1;
   const s=randShape();
@@ -448,7 +464,9 @@ function update(){
     // a flat sustained shove, and tuned to be a small nudge, not a gale.
     const envelope=Math.sin(Math.PI*(1-gustTimer/GUST_ACTIVE_FRAMES));
     const heightLevel=blocks.length-1;
-    const accel=(0.00045+gustsSurvived*0.00003+heightLevel*0.000025)*DPR*gustDir*envelope;
+    // Wind still gets a little stronger with height, but much less than grip/shape difficulty do —
+    // the height term here is deliberately small.
+    const accel=(0.00045+gustsSurvived*0.00003+heightLevel*0.000012)*DPR*gustDir*envelope;
     for(let i=1;i<blocks.length;i++){
       const b=blocks[i];
       Matter.Sleeping.set(b,false);
