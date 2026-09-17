@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Toppled!</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1b1f3b">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <style>
   /* Core mechanic: drop sliding shapes onto the stack; real rigid-body physics (Matter.js) decides if it settles or topples */
   html,body{margin:0;height:100%;background:#1b1f3b;overflow:hidden;font-family:'Segoe UI',Arial,sans-serif;}
@@ -820,6 +824,9 @@ document.getElementById('menuBestVal').textContent=save.best;
 draw();
 requestAnimationFrame(loop);
 if(pokiSDK) pokiSDK.gameLoadingFinished();
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
+}
 </script>
 </body>
 </html>
