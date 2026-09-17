@@ -786,7 +786,23 @@ function draw(){
   }
   ctx.globalAlpha=1;
 }
-function loop(){update();draw();requestAnimationFrame(loop);}
+const STEP_MS=1000/60, MAX_STEPS_PER_FRAME=5;
+let lastFrameTime=null, stepAccumulator=0;
+function loop(timestamp){
+  if(lastFrameTime===null) lastFrameTime=timestamp;
+  let delta=timestamp-lastFrameTime;
+  lastFrameTime=timestamp;
+  if(delta>250) delta=250;
+  stepAccumulator+=delta;
+  let steps=0;
+  while(stepAccumulator>=STEP_MS && steps<MAX_STEPS_PER_FRAME){
+    update();
+    stepAccumulator-=STEP_MS;
+    steps++;
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
 window.addEventListener('pointerdown',e=>{
   if(state==='play' && !e.target.closest('button')) drop();
 });
@@ -802,7 +818,7 @@ document.getElementById('muteBtn').textContent=save.muted?'🔇':'🔊';
 updateCoinDisplays();
 document.getElementById('menuBestVal').textContent=save.best;
 draw();
-loop();
+requestAnimationFrame(loop);
 if(pokiSDK) pokiSDK.gameLoadingFinished();
 </script>
 </body>
